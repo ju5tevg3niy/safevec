@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use safevec::*;
 
@@ -116,41 +116,90 @@ fn double_remove_both() {
 #[test]
 fn iter() {
     let mut sv = SafeVec::new();
-    let g1 = sv.push(1);
-    let g2 = sv.push(2);
-    assert_eq!(Some(&1), sv.get(g1));
-    assert_eq!(Some(&2), sv.get(g2));
-    assert_eq!(2, sv.len());
-    assert!(!sv.is_empty());
+    let mut saved = HashMap::new();
 
-    let mut data_in_sv = HashSet::new();
+    const N: usize = 20;
 
-    for d in &sv {
-        data_in_sv.insert(*d);
+    let to_remove = [1, 19, 3, 7, 18, 0];
+
+    assert!(N > to_remove.len());
+
+    for x in 0..N {
+        saved.insert(x, sv.push(x));
     }
 
-    assert_eq!(HashSet::from([1, 2]), data_in_sv);
+    for x in 0..N {
+        assert_eq!(Some(&x), sv.get(saved[&x]));
+    }
+
+    assert_eq!(N, sv.len());
+    assert!(!sv.is_empty());
+
+    let mut data_in_sv: HashSet<usize> = HashSet::new();
+
+    data_in_sv.extend(sv.iter());
+
+    assert_eq!(HashSet::from_iter(saved.keys().cloned()), data_in_sv);
+
+    for tr in to_remove {
+        sv.remove(saved[&tr]);
+        saved.remove(&tr);
+    }
+
+    assert_eq!(N - to_remove.len(), sv.len());
+    assert!(!sv.is_empty());
+
+    data_in_sv.clear();
+    data_in_sv.extend(&sv);
+
+    assert_eq!(HashSet::from_iter(saved.keys().cloned()), data_in_sv);
 }
 
 #[test]
 fn iter_mut() {
     let mut sv = SafeVec::new();
-    let g1 = sv.push(1);
-    let g2 = sv.push(2);
-    assert_eq!(Some(&1), sv.get(g1));
-    assert_eq!(Some(&2), sv.get(g2));
-    assert_eq!(2, sv.len());
+    let mut saved_before = HashMap::new();
+    let mut saved_after = HashMap::new();
+
+    const N: usize = 20;
+
+    let mut to_remove = [1, 19, 3, 7, 18, 0];
+
+    assert!(N > to_remove.len());
+
+    for x in 0..N {
+        let g = sv.push(x);
+        saved_before.insert(x, g);
+        saved_after.insert(x * 42, g);
+    }
+
+    for x in 0..N {
+        assert_eq!(Some(&x), sv.get(saved_before[&x]));
+    }
+
+    assert_eq!(N, sv.len());
     assert!(!sv.is_empty());
 
-    for d in &mut sv {
-        *d *= 42;
+    sv.iter_mut().for_each(|x| *x *= 42);
+
+    let mut data_in_sv: HashSet<usize> = HashSet::new();
+
+    data_in_sv.extend(sv.iter());
+
+    assert_eq!(HashSet::from_iter(saved_after.keys().cloned()), data_in_sv);
+
+    to_remove.iter_mut().for_each(|x| *x *= 42);
+
+    for tr in to_remove {
+        sv.remove(saved_after[&tr]);
+        saved_after.remove(&tr);
     }
 
-    let mut data_in_sv = HashSet::new();
+    assert_eq!(N - to_remove.len(), sv.len());
+    assert!(!sv.is_empty());
 
-    for d in &sv {
-        data_in_sv.insert(*d);
-    }
+    data_in_sv.clear();
+    data_in_sv.extend(&sv);
 
-    assert_eq!(HashSet::from([42, 84]), data_in_sv);
+    assert_eq!(HashSet::from_iter(saved_after.keys().cloned()), data_in_sv);
 }

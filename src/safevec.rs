@@ -10,29 +10,11 @@ pub struct GenIdx {
     outer_idx: usize,
 }
 
-/// Internal data slot
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GenData<T> {
-    gen_idx: GenIdx,
-    data: T,
-}
-
-impl<T> GenData<T> {
-    fn new(data: T, outer_idx: usize) -> Self {
-        Self {
-            gen_idx: GenIdx {
-                generation: 0,
-                outer_idx,
-            },
-            data,
-        }
-    }
-}
-
 /// Vector with indexes that survive data push/remove in O(1) amortized
 #[derive(Debug, PartialEq, Eq)]
 pub struct SafeVec<T> {
-    data: Vec<GenData<T>>,
+    data: Vec<T>,
+    gen: Vec<GenIdx>,
     outer2inner: Vec<usize>,
     first_unused: usize,
 }
@@ -47,6 +29,7 @@ impl<T> SafeVec<T> {
         Self {
             first_unused: 0,
             data: Vec::with_capacity(capacity),
+            gen: Vec::with_capacity(capacity),
             outer2inner: Vec::with_capacity(capacity),
         }
     }
@@ -63,20 +46,21 @@ impl<T> SafeVec<T> {
             }
             Ordering::Equal => {
                 // We are full, we use data_len as both inner & outer index
-                // create new GenData
-                let new_gen_data = GenData::new(data, data_len);
-                // insert it into data vector
-                self.data.push(new_gen_data);
+                self.data.push(data);
+                self.gen.push(GenIdx {
+                    generation: 0,
+                    outer_idx: data_len,
+                });
                 // remember mapping between outer->inner indexes
                 self.outer2inner.push(data_len);
             }
             Ordering::Less => {
                 // We are not full, just use first unused
-                self.data[first_unused].data = data;
+                self.data[first_unused] = data;
             }
         }
         // take unused gen_idx and mark it as used
-        let gidx = self.data[first_unused].gen_idx;
+        let gidx = self.gen[first_unused];
         self.first_unused += 1;
         gidx
     }
@@ -87,18 +71,19 @@ impl<T> SafeVec<T> {
     /// Time: O(1)
     pub fn remove(&mut self, gen_idx: GenIdx) -> bool {
         let inner_idx = self.outer2inner[gen_idx.outer_idx];
-        let gen_data = &mut self.data[inner_idx];
-        if gen_data.gen_idx != gen_idx {
+        let stored_gen_idx = &mut self.gen[inner_idx];
+        if *stored_gen_idx != gen_idx {
             // double free or something else is wrong
             return false;
         }
-        gen_data.gen_idx.generation += 1;
+        stored_gen_idx.generation += 1;
         let l = inner_idx;
         self.first_unused -= 1;
         let r = self.first_unused;
-        self.outer2inner[self.data[l].gen_idx.outer_idx] = r;
-        self.outer2inner[self.data[r].gen_idx.outer_idx] = l;
+        self.outer2inner[self.gen[l].outer_idx] = r;
+        self.outer2inner[self.gen[r].outer_idx] = l;
         self.data.swap(l, r);
+        self.gen.swap(l, r);
         true
     }
 
@@ -107,9 +92,9 @@ impl<T> SafeVec<T> {
     /// Time: O(1)
     pub fn get(&self, gen_idx: GenIdx) -> Option<&T> {
         let inner_idx = self.outer2inner[gen_idx.outer_idx];
-        let gen_data = &self.data[inner_idx];
-        if gen_data.gen_idx == gen_idx {
-            Some(&gen_data.data)
+        let stored_gen_idx = self.gen[inner_idx];
+        if stored_gen_idx == gen_idx {
+            Some(&self.data[inner_idx])
         } else {
             None
         }
@@ -120,9 +105,9 @@ impl<T> SafeVec<T> {
     /// Time: O(1)
     pub fn get_mut(&mut self, gen_idx: GenIdx) -> Option<&mut T> {
         let inner_idx = self.outer2inner[gen_idx.outer_idx];
-        let gen_data = &mut self.data[inner_idx];
-        if gen_data.gen_idx == gen_idx {
-            Some(&mut gen_data.data)
+        let stored_gen_idx = self.gen[inner_idx];
+        if stored_gen_idx == gen_idx {
+            Some(&mut self.data[inner_idx])
         } else {
             None
         }
@@ -138,16 +123,12 @@ impl<T> SafeVec<T> {
         self.first_unused == 0
     }
 
-    pub fn iter(&self) -> SVIter<T> {
-        SVIter {
-            inner: self.data.iter(),
-        }
+    pub fn iter(&self) -> Iter<T> {
+        self.data[..self.first_unused].iter()
     }
 
-    pub fn iter_mut(&mut self) -> SVIterMut<T> {
-        SVIterMut {
-            inner: self.data.iter_mut(),
-        }
+    pub fn iter_mut(&mut self) -> IterMut<T> {
+        self.data[..self.first_unused].iter_mut()
     }
 }
 
@@ -157,33 +138,9 @@ impl<T> Default for SafeVec<T> {
     }
 }
 
-pub struct SVIter<'a, T> {
-    inner: Iter<'a, GenData<T>>,
-}
-
-impl<'a, T> Iterator for SVIter<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|gd| &gd.data)
-    }
-}
-
-pub struct SVIterMut<'a, T> {
-    inner: IterMut<'a, GenData<T>>,
-}
-
-impl<'a, T> Iterator for SVIterMut<'a, T> {
-    type Item = &'a mut T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|gd| &mut gd.data)
-    }
-}
-
 impl<'a, T> IntoIterator for &'a SafeVec<T> {
     type Item = &'a T;
-    type IntoIter = SVIter<'a, T>;
+    type IntoIter = Iter<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -192,7 +149,7 @@ impl<'a, T> IntoIterator for &'a SafeVec<T> {
 
 impl<'a, T> IntoIterator for &'a mut SafeVec<T> {
     type Item = &'a mut T;
-    type IntoIter = SVIterMut<'a, T>;
+    type IntoIter = IterMut<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter_mut()
