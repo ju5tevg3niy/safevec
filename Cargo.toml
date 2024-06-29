@@ -2,3 +2,10 @@
 name = "safevec"
 version = "1.0.0"
 edition = "2021"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "safevec"
+harness = false
